@@ -1,0 +1,404 @@
+# - - - - - - - - - - - - - - - - - - - - - - - - - #
+#    COVID-19 Canada Data Bot Created By Zowsky     #
+# - - - - - - - - - - - - - - - - - - - - - - - - - #
+# Data sources are from Covid19Tracker.ca's API     #
+# https://api.covid19tracker.ca/summary             #
+# https://api.covid19tracker.ca/summary/split       #
+# https://api.covid19tracker.ca/reports             #
+# https://api.covid19tracker.ca/reports/province/ON #
+# - - - - - - - - - - - - - - - - - - - - - - - - - #
+
+import discord
+from discord.ext import tasks, commands
+from discord.utils import get
+import urllib.request, json 
+from datetime import datetime
+from pytz import timezone
+import random
+import time
+import os
+
+est = timezone('EST')
+
+version = '1.0'
+TOKEN = '' # API key
+CHANNEL_ID = '' # channel ID that you wish to see COVID-19 updates in 
+
+key_list = {'change_cases': 'New Cases', 'change_fatalities': 'New Deaths',  # key list if a key parameter is passed in .province command
+        'change_tests': 'New Tests', 'change_hospitalizations': 'New Hospitalizations', 
+        'change_criticals': 'New Criticals', 'change_recoveries': 'New Recoveries', 
+        'change_vaccinations': 'New Vaccinations', 'change_vaccines_distributed': 'New Vaccines Distributed',
+        'change_vaccinated': 'New Vaccinated', 'total_cases': 'Total Cases', 'total_fatalities': 'Total Deaths',
+        'total_tests': 'Total Tests', 'total_hospitalizations': 'Total Hospitalizations', 'total_criticals': 'Total Criticals',
+        'total_recoveries': 'Total Recoveries', 'total_vaccinations': 'Total Vaccinations', 'total_vaccines_distributed': 'Total Vaccines Distributed',
+        'total_vaccinated': 'Total Vaccinated'}
+
+province_index = {0: ['Ontario', 'ON', 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Flag_of_Ontario.svg/255px-Flag_of_Ontario.svg.png', 'ontario', 'ont', 'on'], # Province indexes are used for embeds in .province command
+                1: ['Quebec', 'QC', 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Flag_of_Quebec.svg/255px-Flag_of_Quebec.svg.png', 'quebec', 'que', 'qc', 'q'], 
+                2: ['Nova Scotia', 'NS', 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Flag_of_Nova_Scotia.svg/255px-Flag_of_Nova_Scotia.svg.png', 'novascotia', 'ns'],
+                3: ['New Brunswick', 'NB', 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Flag_of_New_Brunswick.svg/255px-Flag_of_New_Brunswick.svg.png', 'newbrunswick', 'nb'],
+                4: ['Manitoba', 'MB', 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c4/Flag_of_Manitoba.svg/255px-Flag_of_Manitoba.svg.png', 'manitoba', 'mb'],
+                5: ['British Columbia', 'BC', 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b8/Flag_of_British_Columbia.svg/255px-Flag_of_British_Columbia.svg.png', 'britishcolumbia', 'british columbia', 'british', 'bc'],
+                6: ['Prince Edward Island', 'PE', 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d7/Flag_of_Prince_Edward_Island.svg/255px-Flag_of_Prince_Edward_Island.svg.png', 'pei', 'princeedwardisland', 'princeedward', 'prince', 'pe'],
+                7: ['Saskatchewan', 'SK', 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/Flag_of_Saskatchewan.svg/255px-Flag_of_Saskatchewan.svg.png', 'saskatchewan', 'sk', 'sask'],
+                8: ['Alberta', 'AB', 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f5/Flag_of_Alberta.svg/255px-Flag_of_Alberta.svg.png', 'alberta', 'ab', 'alb'],
+                9: ['Newfoundland', 'NL', 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Flag_of_Newfoundland_and_Labrador.svg/255px-Flag_of_Newfoundland_and_Labrador.svg.png', 'newfoundland', 'labrador', 'nl', 'newfound'],
+                10: ['Northwest Territories', 'NT', 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Flag_of_the_Northwest_Territories.svg/255px-Flag_of_the_Northwest_Territories.svg.png', 'northwestterritories', 'nt', 'northwest'],
+                11: ['Yukon', 'YT', 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Flag_of_Yukon.svg/255px-Flag_of_Yukon.svg.png', 'yukon', 'yt', 'yuk'],
+                12: ['Nunavut', 'NU', 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Flag_of_Nunavut.svg/255px-Flag_of_Nunavut.svg.png', 'nunavut', 'nu'],
+                13: ['Canada', 'CA', 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d9/Flag_of_Canada_%28Pantone%29.svg/255px-Flag_of_Canada_%28Pantone%29.svg.png', 'canad', 'ca', 'cad']}
+
+
+bot = commands.Bot(command_prefix='.', case_insensitive=True, description="bot", help_command=None)
+
+
+@bot.event
+async def on_ready():
+    print("COVID-19 Data is online. Version is", version)
+    activity = discord.Activity(name='{} - .help for commands'.format(version), type=discord.ActivityType.playing)
+    await bot.change_presence(activity=activity)
+    scheduler.start()
+
+@bot.event
+async def on_command_error(ctx, error):
+    embed = discord.Embed(title='ERROR: Unknown command, or invalid syntax.', colour=discord.Colour.red())
+    embed.add_field(name="`Information`", value=error)
+    await ctx.channel.send(embed=embed)
+    print(datetime.now(), ctx.message.author, 'sent invalid command.', error)
+
+@bot.command(pass_context=True)
+async def help(ctx):
+    embed=discord.Embed(title="Commands", color=0x6400ff)
+    embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/Gear_icon_svg.svg/280px-Gear_icon_svg.svg.png")
+    embed.add_field(name=".canada [opt. date(YYYY-MM-DD)] [opt. key]", value="Shows summary data for Canada", inline=False)
+    embed.add_field(name=".province [province] [opt. date(YYYY-MM-DD)] [opt. key]", value="Shows summary data for a specific province", inline=False)
+    embed.add_field(name=".keys", value="Shows available keys for Covid data", inline=False)
+    embed.add_field(name=".codes", value="Shows province codes", inline=False)
+    embed.add_field(name=".flip", value="Flips a coin", inline=True)
+    embed.add_field(name=".version", value="Shows bot version", inline=False)
+    embed.set_footer(text="{}".format(version))
+    await ctx.send(embed=embed)
+
+@bot.command(pass_context=True, aliases=['fl', 'f', 'flip']) # Coin flip command
+async def coinflip(ctx):
+    coin_flip = ['heads', 'tails']
+    result = random.choice(coin_flip)
+
+    if result == 'tails':
+        embed_flip = discord.Embed(title='Tails', color=0x6400ff)
+        embed_flip.set_thumbnail(url='https://external-content.duckduckgo.com/iu/?u=http%3A%2F%2Fwww.clker.com%2Fcliparts%2F4%2Fa%2F2%2F6%2F1393621733287511319tails-md.png&f=1&nofb=1')
+        await ctx.send(ctx.message.author.mention)
+        await ctx.send(embed=embed_flip)
+    else:
+        embed_flip = discord.Embed(title='Heads', color=0x6400ff)
+        embed_flip.set_thumbnail(url='https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fcommons%2Fa%2Fa0%2F2006_Quarter_Proof.png&f=1&nofb=1')
+        await ctx.send(ctx.message.author.mention)
+        await ctx.send(embed=embed_flip)
+
+@bot.command(pass_context=True, aliases=['ver', 'v', 'version']) # Show version command
+async def botversion(ctx):
+    global version
+    print(ctx.message.author, "executed command '.version'. Version is", version)
+    embed_version = discord.Embed(title='COVID-19 Data Bot {}'.format(version), color=0x6400ff)
+    await ctx.send(embed=embed_version)
+
+@bot.command(pass_context=True, aliases=['code']) # Show province codes command
+async def codes(ctx):
+    embed=discord.Embed(title="Province Codes", color=0xff0000)
+    embed.set_thumbnail(url="https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fen%2Fthumb%2Fc%2Fcf%2FFlag_of_Canada.svg%2F1200px-Flag_of_Canada.svg.png&f=1&nofb=1")
+    embed.add_field(name="Ontario", value="ON", inline=False)
+    embed.add_field(name="Quebec", value="QC", inline=False)
+    embed.add_field(name="Nova Scotia", value="NS", inline=False)
+    embed.add_field(name="New Brunswick", value="NB", inline=False)
+    embed.add_field(name="Manitoba", value="MB", inline=False)
+    embed.add_field(name="British Columbia", value="BC", inline=False)
+    embed.add_field(name="Prince Edward Island", value="PE", inline=False)
+    embed.add_field(name="Saskatchewan", value="SK", inline=False)
+    embed.add_field(name="Alberta", value="AB", inline=False)
+    embed.add_field(name="Newfoundland", value="NL", inline=False)
+    embed.add_field(name="Northwest Territories", value="NT", inline=False)
+    embed.add_field(name="Yukon", value="YT", inline=False)
+    embed.add_field(name="Nunavut", value="NU", inline=False)
+    embed.set_footer(text="{} - .help for commands.".format(version))
+    await ctx.send(embed=embed)
+
+@bot.command(pass_context=True, aliases=['key', 'ke', 'k']) # Show keys for data 
+async def keys(ctx):
+    embed=discord.Embed(title='Data Keys', color=0x6400ff)
+    embed.set_thumbnail(url='https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Ftse1.mm.bing.net%2Fth%3Fid%3DOIP.RGtM0GjHmD-h-2vbkxXo_wHaE8%26pid%3DApi&f=1')
+    embed.add_field(name='New Cases', value='change_cases', inline=True)
+    embed.add_field(name='New Deaths', value='change_fatalities', inline=True)
+    embed.add_field(name='New Tests', value='change_tests', inline=True)
+    embed.add_field(name='New Hospitalizations', value='change_hospitalizations', inline=True)
+    embed.add_field(name='New Criticals', value='change_criticals', inline=True)
+    embed.add_field(name='New Recoveries', value='change_recoveries', inline=True)
+    embed.add_field(name='New Vaccinations', value='change_vaccinations', inline=True)
+    embed.add_field(name='New Vaccines Distributed', value='change_vaccines_distributed', inline=True)
+    embed.add_field(name='New Vaccinations', value='change_vaccinations', inline=True)
+    embed.add_field(name='Total Cases', value='total_cases', inline=True)
+    embed.add_field(name='Total Deaths', value='total_fatalities', inline=True)
+    embed.add_field(name='Total Tests', value='total_tests', inline=True)
+    embed.add_field(name='Total Hospitalizations', value='total_hospitalizations', inline=True)
+    embed.add_field(name='Total Criticals', value='total_criticals', inline=True)
+    embed.add_field(name='Total Recoveries', value='total_recoveries', inline=True)
+    embed.add_field(name='Total Vaccinations', value='total_vaccinations', inline=True)
+    embed.add_field(name='Total Vaccines Distributed', value='total_vaccines_distributed', inline=True)
+    embed.add_field(name='Total Vaccinated', value='total_vaccinated', inline=True)
+    embed.set_footer(text='{} - .help for commands.'.format(version))
+    await ctx.send(embed=embed)
+
+@bot.command(pass_context=True, aliases=['subsc', 'sub'])
+async def subscribe(ctx, channel_name, area):
+    channel = discord.utils.get(ctx.guild.channels, name=channel_name)
+    if not os.path.exists('/subscribed.json'): 
+        with open('/subscribed.json', 'w') as file: # if subscribed.json doesn't exist, create the file
+            print("subscribed.json file does not exist. Making node.")
+    sub_dict = dict() # creates empty dictionary
+    if not area: # if no area parameter is specified, hit em with the error
+        await ctx.send("Please specify the area or area code you'd like to subscribe to (eg. Ontario, ON)")
+    else: # area is specified
+        if os.stat("subscribed.json").st_size == 0: # if file is empty
+            with open('subscribed.json', 'w') as file:
+                sub_dict[channel.id] = [] # creates a new key for channel id and assigns the value as an empty list
+                sub_dict[channel.id].append(area) # appends the area as the value for the key channel id
+                file.write(json.dumps(sub_dict)) # dump the dictionary into the file
+        else: # there is data in the file
+            with open('subscribed.json') as file:
+                sub_dict = json.load(file) # load the file contents into dictionary
+                if channel.id in sub_dict: # if there is a preexisting channel id 
+                    sub_dict[str(channel.id)].append(area) # just append the area value to the preexisting channel id
+                else:
+                    sub_dict[channel.id] = [] # create a new channel id key
+                    sub_dict[channel.id].append(area) # append the area value to the new channel id key
+            with open('subscribed.json', 'w') as file:
+                file.write(json.dumps(sub_dict)) # dump the dictionary into the file
+
+        
+
+
+def canada_summary_data(): # Canada last 24 hour summary data
+    with urllib.request.urlopen("https://api.covid19tracker.ca/summary/") as url:
+        return json.loads(url.read().decode())
+
+def province_summary_data(): # Ontario last 24 hour summary data
+    with urllib.request.urlopen("https://api.covid19tracker.ca/summary/split/") as url:
+        return json.loads(url.read().decode())
+
+def canada_report_data(): # Canada reported data since beginning of pandemic
+    with urllib.request.urlopen("https://api.covid19tracker.ca/reports/") as url:
+        return json.loads(url.read().decode())
+
+def province_report_data(provincecode): # Ontario reported data since beginning of pandemic
+    with urllib.request.urlopen("https://api.covid19tracker.ca/reports/province/" + provincecode) as url:
+        return json.loads(url.read().decode())
+
+
+@bot.command(pass_context=True, aliases=['ca', 'c', 'cad']) # Shows Canada summary data
+async def canada(ctx, date=None, key=None):
+    data = canada_summary_data()
+
+    if not key: # If user does not specify a key parameter
+        if not date: # a date is not specified -------------------- Summary Data
+            embed=discord.Embed(title='Canada COVID-19 Summary Data for {}'.format(data['data'][0]['latest_date']), url='https://covid19tracker.ca/', description='Last updated {}'.format(data['last_updated']), color=0xff0000)
+            embed.set_thumbnail(url='{}'.format(province_index[13][2]))
+            embed.add_field(name='New Cases', value='{}'.format(data['data'][0]['change_cases']), inline=True)
+            embed.add_field(name='New Deaths', value='{}'.format(data['data'][0]['change_fatalities']), inline=True)
+            embed.add_field(name='New Hospitalizations', value='{}'.format(data['data'][0]['change_hospitalizations']), inline=True)
+            embed.add_field(name='New Vaccinations', value='{}'.format(data['data'][0]['change_vaccinations']), inline=True)
+            embed.add_field(name='New Vaccines Distributed', value='{}'.format(data['data'][0]['change_vaccines_distributed']), inline=True)
+            embed.add_field(name='New Vaccinated', value='{}'.format(data['data'][0]['change_vaccinated']), inline=True)
+            embed.add_field(name='Total Cases', value='{}'.format(data['data'][0]['total_cases']), inline=True)
+            embed.add_field(name='Total Deaths', value='{}'.format(data['data'][0]['total_fatalities']), inline=True)
+            embed.add_field(name='Total Hospitalizations', value='{}'.format(data['data'][0]['total_hospitalizations']), inline=True)
+            embed.add_field(name='Total Vaccinations', value='{}'.format(data['data'][0]['total_vaccinations']), inline=True)
+            embed.add_field(name='Total Vaccines Distributed', value='{}'.format(data['data'][0]['total_vaccines_distributed']), inline=True)
+            embed.add_field(name='Total Vaccinated', value='{}'.format(data['data'][0]['total_vaccinated']), inline=True)
+            embed.set_footer(text='{} - .help for commands'.format(version))
+            await ctx.send(embed=embed)
+        else: # a key is not specified, but a date is
+            if date in key_list: # the key parameter is interpreted as a date, since it's ordered. we are checking to see if the parameter passed is actually a key -------- key data for current date
+                name_of_key = key_list[date] # we take the key which is held in var date and index it in key_list
+                embed=discord.Embed(title='Canada COVID-19 {} Data for {}'.format(name_of_key, data['data'][0]['latest_date']), 
+                                url='https://covid19tracker.ca/', description='Last updated {}'.format(data['last_updated']), color=0xff0000)
+                embed.set_thumbnail(url='{}'.format(province_index[13][2]))
+                embed.add_field(name=name_of_key, value='{}'.format(data['data'][0][date]), inline=True)
+                embed.set_footer(text='{} - .help for commands'.format(version))
+                await ctx.send(embed=embed)
+            else: # if the parameter passed isn't in keylist, we assume it's a date
+                date_lookup = canada_report_data() # opens up the URL and decodes the JSON
+                for i in range(0, len(date_lookup['data'])): # i is the index (or the day)
+                    if date_lookup['data'][i]['date'] == date: # if the date key in the index matches the one that's passed by the user, pass the if statement
+                        embed=discord.Embed(title='{} COVID-19 Summary Data for {}'.format(province_index[13][0], date_lookup['data'][i]['date']), 
+                                            url='https://covid19tracker.ca/', color=0xff0000)
+                        embed.set_thumbnail(url='{}'.format(province_index[13][2]))
+                        embed.add_field(name='New Cases', value='{}'.format(date_lookup['data'][i]['change_cases']), inline=True)
+                        embed.add_field(name='New Deaths', value='{}'.format(date_lookup['data'][i]['change_fatalities']), inline=True)
+                        embed.add_field(name='New Hospitalizations', value='{}'.format(date_lookup['data'][i]['change_hospitalizations']), inline=True)
+                        embed.add_field(name='New Vaccinations', value='{}'.format(date_lookup['data'][i]['change_vaccinations']), inline=True)
+                        embed.add_field(name='New Vaccines Distributed', value='{}'.format(date_lookup['data'][i]['change_vaccines_distributed']), inline=True)
+                        embed.add_field(name='New Vaccinated', value='{}'.format(date_lookup['data'][i]['change_vaccinated']), inline=True)
+                        embed.add_field(name='Total Cases', value='{}'.format(date_lookup['data'][i]['total_cases']), inline=True)
+                        embed.add_field(name='Total Deaths', value='{}'.format(date_lookup['data'][i]['total_fatalities']), inline=True)
+                        embed.add_field(name='Total Hospitalizations', value='{}'.format(date_lookup['data'][i]['total_hospitalizations']), inline=True)
+                        embed.add_field(name='Total Vaccinations', value='{}'.format(date_lookup['data'][i]['total_vaccinations']), inline=True)
+                        embed.add_field(name='Total Vaccines Distributed', value='{}'.format(date_lookup['data'][i]['total_vaccines_distributed']), inline=True)
+                        embed.add_field(name='Total Vaccinated', value='{}'.format(date_lookup['data'][i]['total_vaccinated']), inline=True)
+                        embed.set_footer(text='{} - .help for commands'.format(version))
+                        await ctx.send(embed=embed)
+
+    else: # a key is specified
+        name_of_key = key_list[key] # Used for if key parameter is specified under the else statement
+        if key: # a date is specified
+            date_lookup = canada_report_data() # opens up the URL and decodes the JSON
+            for i in range(0, len(date_lookup['data'])): # i is the index (or the day)
+                if date_lookup['data'][i]['date'] == date: # if the date key in the index matches the one that's passed by the user, pass the if statement
+                    embed=discord.Embed(title='{} COVID-19 {} Data for {}'.format(province_index[13][0], name_of_key, date_lookup['data'][i]['date']), 
+                                        url='https://covid19tracker.ca/', color=0xff0000)
+                    embed.set_thumbnail(url='{}'.format(province_index[13][2]))
+                    embed.add_field(name=name_of_key, value='{}'.format(date_lookup['data'][i][key]), inline=True)
+                    embed.set_footer(text='{} - .help for commands'.format(version))
+                    await ctx.send(embed=embed)
+
+
+@bot.command(pass_context=True, aliases=['provinces', 'prov', 'pr', 'p']) # Shows Ontario summary data
+async def province(ctx, prov, date=None, key=None):
+    last_updated = canada_summary_data()['last_updated']
+    data = province_summary_data()
+    
+    if prov in province_index[0]: # Ontario
+        provinceid = 0
+    elif prov in province_index[1]: # Quebec
+        provinceid = 1
+    elif prov in province_index[2]: # Nova Scotia
+        provinceid = 2
+    elif prov in province_index[3]: # Newbrunswick
+        provinceid = 3
+    elif prov in province_index[4]: # Manitoba
+        provinceid = 4
+    elif prov in province_index[5]: # British Columbia
+        provinceid = 5
+    elif prov in province_index[6]: # PEI
+        provinceid = 6
+    elif prov in province_index[7]: # Saskatchewan
+        provinceid = 7 
+    elif prov in province_index[8]: # Alberta
+        provinceid = 8
+    elif prov in province_index[9]: # Newfoundland
+        provinceid = 9
+    elif prov in province_index[10]: # Northwest Territories
+        provinceid = 10
+    elif prov in province_index[11]: # Yukon
+        provinceid = 11
+    elif prov in province_index[12]: # Nunavut
+        provinceid = 12
+
+    if not key:    # a key is not specified
+        if not date: # a date is not specified
+            embed=discord.Embed(title='{} COVID-19 Summary Data for {}'.format(province_index[provinceid][0], data['data'][provinceid]['date']), 
+                                url='https://covid19tracker.ca/', description='Last updated {}'.format(last_updated), color=0xff0000)
+            embed.set_thumbnail(url='{}'.format(province_index[provinceid][2]))
+            embed.add_field(name='New Cases', value='{}'.format(data['data'][provinceid]['change_cases']), inline=True)
+            embed.add_field(name='New Deaths', value='{}'.format(data['data'][provinceid]['change_fatalities']), inline=True)
+            embed.add_field(name='New Hospitalizations', value='{}'.format(data['data'][provinceid]['change_hospitalizations']), inline=True)
+            embed.add_field(name='New Vaccinations', value='{}'.format(data['data'][provinceid]['change_vaccinations']), inline=True)
+            embed.add_field(name='New Vaccines Distributed', value='{}'.format(data['data'][provinceid]['change_vaccines_distributed']), inline=True)
+            embed.add_field(name='New Vaccinated', value='{}'.format(data['data'][provinceid]['change_vaccinated']), inline=True)
+            embed.add_field(name='Total Cases', value='{}'.format(data['data'][provinceid]['total_cases']), inline=True)
+            embed.add_field(name='Total Deaths', value='{}'.format(data['data'][provinceid]['total_fatalities']), inline=True)
+            embed.add_field(name='Total Hospitalizations', value='{}'.format(data['data'][provinceid]['total_hospitalizations']), inline=True)
+            embed.add_field(name='Total Vaccinations', value='{}'.format(data['data'][provinceid]['total_vaccinations']), inline=True)
+            embed.add_field(name='Total Vaccines Distributed', value='{}'.format(data['data'][provinceid]['total_vaccines_distributed']), inline=True)
+            embed.add_field(name='Total Vaccinated', value='{}'.format(data['data'][provinceid]['total_vaccinated']), inline=True)
+            embed.set_footer(text='{} - .help for commands'.format(version))
+            await ctx.send(embed=embed)
+        else: # a key is not specified, but a date is
+            if date in key_list: # the key parameter is interpreted as a date, since it's ordered. we are checking to see if the parameter passed is actually a key
+                name_of_key = key_list[date] # we take the key which is held in var date and index it in key_list
+                embed=discord.Embed(title='{} COVID-19 {} Data for {}'.format(province_index[provinceid][0], name_of_key, data['data'][provinceid]['date']), 
+                                url='https://covid19tracker.ca/', description='Last updated {}'.format(last_updated), color=0xff0000)
+                embed.set_thumbnail(url='{}'.format(province_index[provinceid][2]))
+                embed.add_field(name=name_of_key, value='{}'.format(data['data'][provinceid][date]), inline=True)
+                embed.set_footer(text='{} - .help for commands'.format(version))
+                await ctx.send(embed=embed)
+            else: # if the parameter passed isn't in keylist, we assume it's a date
+                date_lookup = province_report_data(province_index[provinceid][1]) # opens up the URL using the province code and decodes the JSON
+                for i in range(0, len(date_lookup['data'])): # i is the index (or the day)
+                    if date_lookup['data'][i]['date'] == date: # if the date key in the index matches the one that's passed by the user, pass the if statement
+                        embed=discord.Embed(title='{} COVID-19 Summary Data for {}'.format(province_index[provinceid][0], date_lookup['data'][i]['date']), 
+                                            url='https://covid19tracker.ca/', color=0xff0000)
+                        embed.set_thumbnail(url='{}'.format(province_index[provinceid][2]))
+                        embed.add_field(name='New Cases', value='{}'.format(date_lookup['data'][i]['change_cases']), inline=True)
+                        embed.add_field(name='New Deaths', value='{}'.format(date_lookup['data'][i]['change_fatalities']), inline=True)
+                        embed.add_field(name='New Hospitalizations', value='{}'.format(date_lookup['data'][i]['change_hospitalizations']), inline=True)
+                        embed.add_field(name='New Vaccinations', value='{}'.format(date_lookup['data'][i]['change_vaccinations']), inline=True)
+                        embed.add_field(name='New Vaccines Distributed', value='{}'.format(date_lookup['data'][i]['change_vaccines_distributed']), inline=True)
+                        embed.add_field(name='New Vaccinated', value='{}'.format(date_lookup['data'][i]['change_vaccinated']), inline=True)
+                        embed.add_field(name='Total Cases', value='{}'.format(date_lookup['data'][i]['total_cases']), inline=True)
+                        embed.add_field(name='Total Deaths', value='{}'.format(date_lookup['data'][i]['total_fatalities']), inline=True)
+                        embed.add_field(name='Total Hospitalizations', value='{}'.format(date_lookup['data'][i]['total_hospitalizations']), inline=True)
+                        embed.add_field(name='Total Vaccinations', value='{}'.format(date_lookup['data'][i]['total_vaccinations']), inline=True)
+                        embed.add_field(name='Total Vaccines Distributed', value='{}'.format(date_lookup['data'][i]['total_vaccines_distributed']), inline=True)
+                        embed.add_field(name='Total Vaccinated', value='{}'.format(date_lookup['data'][i]['total_vaccinated']), inline=True)
+                        embed.set_footer(text='{} - .help for commands'.format(version))
+                        await ctx.send(embed=embed)
+    
+    else: # a key is specified
+        name_of_key = key_list[key] # Used for if key parameter is specified under the else statement
+        if key: # a date is specified
+            date_lookup = province_report_data(province_index[provinceid][1]) # opens up the URL using the province code and decodes the JSON
+            for i in range(0, len(date_lookup['data'])): # i is the index (or the day)
+                if date_lookup['data'][i]['date'] == date: # if the date key in the index matches the one that's passed by the user, pass the if statement
+                    embed=discord.Embed(title='{} COVID-19 {} Data for {}'.format(province_index[provinceid][0], name_of_key, date_lookup['data'][i]['date']), 
+                                        url='https://covid19tracker.ca/', color=0xff0000)
+                    embed.set_thumbnail(url='{}'.format(province_index[provinceid][2]))
+                    embed.add_field(name=name_of_key, value='{}'.format(date_lookup['data'][i][key]), inline=True)
+                    embed.set_footer(text='{} - .help for commands'.format(version))
+                    await ctx.send(embed=embed)
+
+
+
+@tasks.loop(seconds=60.0) 
+async def scheduler(): # scheduler functions loops every 60 seconds and checks if time == 11:59. if it passes, send canada and ontario covid-19 summary data
+    if datetime.now(est).hour == 23 and datetime.now().minute == 59:
+
+        data = canada_summary_data()
+        embed_cad=discord.Embed(title='Canada COVID-19 Summary Data for {}'.format(data['data'][0]['latest_date']), url='https://covid19tracker.ca/', description='Last updated {}'.format(data['last_updated']), color=0xff0000)
+        embed_cad.set_thumbnail(url='https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fen%2Fthumb%2Fc%2Fcf%2FFlag_of_Canada.svg%2F1200px-Flag_of_Canada.svg.png&f=1&nofb=1')
+        embed_cad.add_field(name='New Cases', value='{}'.format(data['data'][0]['change_cases']), inline=True)
+        embed_cad.add_field(name='New Deaths', value='{}'.format(data['data'][0]['change_fatalities']), inline=True)
+        embed_cad.add_field(name='New Hospitalizations', value='{}'.format(data['data'][0]['change_hospitalizations']), inline=True)
+        embed_cad.add_field(name='New Vaccinations', value='{}'.format(data['data'][0]['change_vaccinations']), inline=True)
+        embed_cad.add_field(name='New Vaccines Distributed', value='{}'.format(data['data'][0]['change_vaccines_distributed']), inline=True)
+        embed_cad.add_field(name='New Vaccinated', value='{}'.format(data['data'][0]['change_vaccinated']), inline=True)
+        embed_cad.add_field(name='Total Cases', value='{}'.format(data['data'][0]['total_cases']), inline=True)
+        embed_cad.add_field(name='Total Deaths', value='{}'.format(data['data'][0]['total_fatalities']), inline=True)
+        embed_cad.add_field(name='Total Hospitalizations', value='{}'.format(data['data'][0]['total_hospitalizations']), inline=True)
+        embed_cad.add_field(name='Total Vaccinations', value='{}'.format(data['data'][0]['total_vaccinations']), inline=True)
+        embed_cad.add_field(name='Total Vaccines Distributed', value='{}'.format(data['data'][0]['total_vaccines_distributed']), inline=True)
+        embed_cad.add_field(name='Total Vaccinated', value='{}'.format(data['data'][0]['total_vaccinated']), inline=True)
+        embed_cad.set_footer(text='{} - .help for commands'.format(version))
+
+        last_updated = canada_summary_data()['last_updated']
+        data = province_summary_data()
+        embed_ont=discord.Embed(title='Ontario COVID-19 Summary Data for {}'.format(data['data'][0]['date']), url='https://covid19tracker.ca/', description='Last updated {}'.format(last_updated), color=0xff0000)
+        embed_ont.set_thumbnail(url='https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fcommons%2Fthumb%2F8%2F88%2FFlag_of_Ontario.svg%2F1200px-Flag_of_Ontario.svg.png&f=1&nofb=1')
+        embed_ont.add_field(name='New Cases', value='{}'.format(data['data'][0]['change_cases']), inline=True)
+        embed_ont.add_field(name='New Deaths', value='{}'.format(data['data'][0]['change_fatalities']), inline=True)
+        embed_ont.add_field(name='New Hospitalizations', value='{}'.format(data['data'][0]['change_hospitalizations']), inline=True)
+        embed_ont.add_field(name='New Vaccinations', value='{}'.format(data['data'][0]['change_vaccinations']), inline=True)
+        embed_ont.add_field(name='New Vaccines Distributed', value='{}'.format(data['data'][0]['change_vaccines_distributed']), inline=True)
+        embed_ont.add_field(name='New Vaccinated', value='{}'.format(data['data'][0]['change_vaccinated']), inline=True)
+        embed_ont.add_field(name='Total Cases', value='{}'.format(data['data'][0]['total_cases']), inline=True)
+        embed_ont.add_field(name='Total Deaths', value='{}'.format(data['data'][0]['total_fatalities']), inline=True)
+        embed_ont.add_field(name='Total Hospitalizations', value='{}'.format(data['data'][0]['total_hospitalizations']), inline=True)
+        embed_ont.add_field(name='Total Vaccinations', value='{}'.format(data['data'][0]['total_vaccinations']), inline=True)
+        embed_ont.add_field(name='Total Vaccines Distributed', value='{}'.format(data['data'][0]['total_vaccines_distributed']), inline=True)
+        embed_ont.add_field(name='Total Vaccinated', value='{}'.format(data['data'][0]['total_vaccinated']), inline=True)
+        embed_ont.set_footer(text='{} - .help for commands'.format(version))
+
+
+        channel = bot.get_channel(CHANNEL_ID) # #covid-19-data channel
+        await channel.send(embed=embed_cad) # sends canada summary
+        await channel.send(embed=embed_ont) # sends ontario summary
+
+bot.run(TOKEN)
